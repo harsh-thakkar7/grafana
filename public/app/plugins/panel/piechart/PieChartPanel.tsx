@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Subscription } from 'rxjs';
 
 import {
+  type BusEvent,
   DataHoverClearEvent,
   DataHoverEvent,
   FALLBACK_COLOR,
@@ -223,11 +224,24 @@ function useSliceHighlightState() {
   const { eventBus } = usePanelContext();
 
   useEffect(() => {
+    // Hover events are published on the event bus shared by all panels of a
+    // dashboard (the cursor-sync scope), so a legend hover on a different
+    // panel reaches this subscription too. Only react to events published by
+    // this panel's own bus, mirroring the origin check in the uPlot
+    // cursor-sync plugin (EventBusPlugin).
+    const isOwnPanelEvent = (event: BusEvent) => event.origin === eventBus;
+
     const setHighlightedSlice = (event: DataHoverEvent) => {
+      if (!isOwnPanelEvent(event)) {
+        return;
+      }
       setHighlightedTitle(event.payload.dataId);
     };
 
     const resetHighlightedSlice = (event: DataHoverClearEvent) => {
+      if (!isOwnPanelEvent(event)) {
+        return;
+      }
       setHighlightedTitle(undefined);
     };
 

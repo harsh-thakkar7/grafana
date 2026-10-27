@@ -13,9 +13,12 @@ import {
   LoadingState,
   getDefaultTimeRange,
   EventBusSrv,
+  DataHoverClearEvent,
+  DataHoverEvent,
 } from '@grafana/data';
 import { selectors } from '@grafana/e2e-selectors';
 import { LegendDisplayMode, SortOrder, TooltipDisplayMode } from '@grafana/schema';
+import { PanelContextProvider } from '@grafana/ui';
 
 import { PieChartPanel, comparePieChartItemsByValue } from './PieChartPanel';
 import {
@@ -618,3 +621,102 @@ const setup = (propsOverrides?: {}) => {
 
   return render(<PieChartPanel {...props} />);
 };
+
+describe('slice highlight event scoping', () => {
+  // Hover events travel on the event bus shared by all panels of a dashboard,
+  // where every panel publishes through its own scoped wrapper. Reproduce that
+  // topology here: one shared bus, one scoped wrapper per panel.
+  const setupWithScopedBuses = () => {
+    const sharedBus = new EventBusSrv();
+    const ownBus = sharedBus.newScopedBus('own-panel');
+    const otherPanelBus = sharedBus.newScopedBus('other-panel');
+
+    const props: PieChartPanelProps = {
+      id: 1,
+      data: {
+        state: LoadingState.Done,
+        timeRange: getDefaultTimeRange(),
+        series: makeSeries([
+          { name: 'Chrome', value: 60 },
+          { name: 'Firefox', value: 40 },
+        ]),
+      },
+      timeZone: 'utc',
+      options: buildOptions(),
+      fieldConfig: { defaults: {}, overrides: [] },
+      width: 532,
+      height: 250,
+      renderCounter: 0,
+      title: 'A pie chart',
+      transparent: false,
+      onFieldConfigChange: () => {},
+      onOptionsChange: () => {},
+      onChangeTimeRange: () => {},
+      replaceVariables: (s: string) => s,
+      eventBus: ownBus,
+      timeRange: getDefaultTimeRange(),
+    };
+
+    render(
+      <PanelContextProvider value={{ eventsScope: 'own-panel', eventBus: ownBus }}>
+        <PieChartPanel {...props} />
+      </PanelContextProvider>
+    );
+
+    return { ownBus, otherPanelBus };
+  };
+
+  const firstSliceClassName = () => screen.getAllByTestId('data testid Pie Chart Slice')[0].getAttribute('class');
+
+  it('highlights the matching slice for hover events published by its own panel', () => {
+    const { ownBus } = setupWithScopedBuses();
+
+    const classNameBefore = firstSliceClassName();
+    act(() => {
+      ownBus.publish({ type: DataHoverEvent.type, payload: { x: 0, y: 0, dataId: 'Chrome' } });
+    });
+
+    expect(firstSliceClassName()).not.toBe(classNameBefore);
+  });
+
+  it('does not highlight any slice for hover events published by another panel', () => {
+    const { otherPanelBus } = setupWithScopedBuses();
+
+    const classNameBefore = firstSliceClassName();
+    act(() => {
+      otherPanelBus.publish({ type: DataHoverEvent.type, payload: { x: 0, y: 0, dataId: 'Chrome' } });
+    });
+
+    expect(firstSliceClassName()).toBe(classNameBefore);
+  });
+
+  it('stops highlighting when a clear event comes from its own panel', () => {
+    const { ownBus } = setupWithScopedBuses();
+
+    act(() => {
+      ownBus.publish({ type: DataHoverEvent.type, payload: { x: 0, y: 0, dataId: 'Chrome' } });
+    });
+    const classNameWhileHighlighted = firstSliceClassName();
+
+    act(() => {
+      ownBus.publish({ type: DataHoverClearEvent.type, payload: { x: 0, y: 0, dataId: 'Chrome' } });
+    });
+
+    expect(firstSliceClassName()).not.toBe(classNameWhileHighlighted);
+  });
+
+  it('keeps highlighting when a clear event comes from another panel', () => {
+    const { ownBus, otherPanelBus } = setupWithScopedBuses();
+
+    act(() => {
+      ownBus.publish({ type: DataHoverEvent.type, payload: { x: 0, y: 0, dataId: 'Chrome' } });
+    });
+    const classNameWhileHighlighted = firstSliceClassName();
+
+    act(() => {
+      otherPanelBus.publish({ type: DataHoverClearEvent.type, payload: { x: 0, y: 0, dataId: 'Chrome' } });
+    });
+
+    expect(firstSliceClassName()).toBe(classNameWhileHighlighted);
+  });
+});
