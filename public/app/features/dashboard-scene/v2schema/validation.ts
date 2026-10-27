@@ -7,6 +7,7 @@ import {
   type VizConfigKind,
   type PanelQueryKind,
   type TransformationKind,
+  type Spec as DashboardV2Spec,
 } from '@grafana/schema/apis/dashboard.grafana.app/v2';
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -148,4 +149,57 @@ const GridLayoutItemKindSchema = z.object({
 
 export function isGridLayoutItemKind(value: unknown): value is GridLayoutItemKind {
   return GridLayoutItemKindSchema.safeParse(value).success;
+}
+
+/**
+ * Returns the names referenced by more than one layout item in a dashboard's layout tree.
+ *
+ * A layout item may reference an element only once: panel repeats are kept as a single item
+ * in the saved layout (the repeat expands at runtime), and rendering the same panel in several
+ * places is what library panels are for. Deserializing duplicated references builds independent
+ * panels with the same element id, which then drift apart on edit and overwrite each other on
+ * save, so the schema must not accept them.
+ */
+export function findDuplicateElementReferences(spec: DashboardV2Spec): string[] {
+  const names: string[] = [];
+
+  const collect = (layout: DashboardV2Spec['layout'] | undefined): void => {
+    if (!layout) {
+      return;
+    }
+    switch (layout.kind) {
+      case 'GridLayout':
+        for (const item of layout.spec.items) {
+          if (item.kind === 'GridLayoutItem') {
+            names.push(item.spec.element.name);
+          }
+        }
+        break;
+      case 'AutoGridLayout':
+        for (const item of layout.spec.items) {
+          if (item.kind === 'AutoGridLayoutItem') {
+            names.push(item.spec.element.name);
+          }
+        }
+        break;
+      case 'TabsLayout':
+        for (const tab of layout.spec.tabs) {
+          collect(tab.spec.layout);
+        }
+        break;
+      case 'RowsLayout':
+        for (const row of layout.spec.rows) {
+          collect(row.spec.layout);
+        }
+        break;
+    }
+  };
+
+  collect(spec.layout);
+
+  const counts = new Map<string, number>();
+  for (const name of names) {
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return [...counts.entries()].filter(([name, count]) => name !== '' && count > 1).map(([name]) => name);
 }

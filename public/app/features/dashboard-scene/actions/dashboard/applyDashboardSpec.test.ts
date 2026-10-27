@@ -354,6 +354,37 @@ describe('applyDashboardSpec', () => {
     expect(scene.state.body).toBeInstanceOf(TabsLayoutManager);
   });
 
+  it('rejects a spec whose layout references the same element more than once', () => {
+    const scene = buildScene(makeTabsSpec('Dashboard'));
+    const originalBody = scene.state.body;
+    const originalIsDirty = scene.state.isDirty;
+
+    const duplicateSpec = makeTabsSpec('Dashboard');
+    duplicateSpec.layout = {
+      kind: 'TabsLayout',
+      spec: {
+        tabs: [
+          {
+            kind: 'TabsLayoutTab',
+            spec: { title: 'Tab 1', layout: { kind: 'GridLayout', spec: { items: [gridItem('panel-1')] } } },
+          },
+          {
+            kind: 'TabsLayoutTab',
+            spec: { title: 'Tab 2', layout: { kind: 'GridLayout', spec: { items: [gridItem('panel-1')] } } },
+          },
+        ],
+      },
+    };
+
+    expect(() =>
+      applyDashboardSpec({ scene, spec: duplicateSpec, description: 'Apply spec', scope: 'code-pane' })
+    ).toThrow(/element reference: panel-1/);
+
+    // Nothing is applied or recorded: the rejected spec leaves the scene untouched.
+    expect(scene.state.body).toBe(originalBody);
+    expect(scene.state.isDirty).toBe(originalIsDirty);
+  });
+
   it('recreates the code pane on apply, undo, and redo so it reloads the current spec', () => {
     const scene = buildScene(makeRowsSpec('Dashboard'));
 

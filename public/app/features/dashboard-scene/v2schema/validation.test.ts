@@ -4,9 +4,11 @@ import {
   defaultPanelQueryKind,
   defaultVizConfigKind,
   defaultGridLayoutItemKind,
+  defaultSpec as defaultDashboardV2Spec,
+  type Spec as DashboardV2Spec,
 } from '@grafana/schema/apis/dashboard.grafana.app/v2';
 
-import { isGridLayoutItemKind, isPanelKindV2 } from './validation';
+import { findDuplicateElementReferences, isGridLayoutItemKind, isPanelKindV2 } from './validation';
 
 describe('v2schema validation', () => {
   it('isPanelKindV2 returns true for a minimal valid PanelKind', () => {
@@ -101,5 +103,111 @@ describe('isGridLayoutItemKind', () => {
     ['number', 123],
   ])('returns false for %s', (_, value) => {
     expect(isGridLayoutItemKind(value)).toBe(false);
+  });
+});
+
+describe('findDuplicateElementReferences', () => {
+  const gridItems = (names: string[]) =>
+    names.map((name) => ({
+      kind: 'GridLayoutItem' as const,
+      spec: { x: 0, y: 0, width: 12, height: 8, element: { kind: 'ElementReference' as const, name } },
+    }));
+
+  const spec = (layout: DashboardV2Spec['layout']): DashboardV2Spec => {
+    return { ...defaultDashboardV2Spec(), layout } as DashboardV2Spec;
+  };
+
+  it('returns [] when each element is referenced once', () => {
+    const layout: DashboardV2Spec['layout'] = {
+      kind: 'GridLayout',
+      spec: { items: gridItems(['panel-1', 'panel-2']) },
+    };
+    expect(findDuplicateElementReferences(spec(layout))).toEqual([]);
+  });
+
+  it('returns [] for an empty layout', () => {
+    expect(findDuplicateElementReferences(spec({ kind: 'GridLayout', spec: { items: [] } }))).toEqual([]);
+  });
+
+  it('flags an element referenced by two items in the same grid', () => {
+    const layout: DashboardV2Spec['layout'] = {
+      kind: 'GridLayout',
+      spec: { items: gridItems(['panel-1', 'panel-2', 'panel-1']) },
+    };
+    expect(findDuplicateElementReferences(spec(layout))).toEqual(['panel-1']);
+  });
+
+  it('flags an element referenced from two tabs', () => {
+    const layout: DashboardV2Spec['layout'] = {
+      kind: 'TabsLayout',
+      spec: {
+        tabs: [
+          {
+            kind: 'TabsLayoutTab',
+            spec: { title: 'Tab 1', layout: { kind: 'GridLayout', spec: { items: gridItems(['panel-1']) } } },
+          },
+          {
+            kind: 'TabsLayoutTab',
+            spec: { title: 'Tab 2', layout: { kind: 'GridLayout', spec: { items: gridItems(['panel-1']) } } },
+          },
+        ],
+      },
+    };
+    expect(findDuplicateElementReferences(spec(layout))).toEqual(['panel-1']);
+  });
+
+  it('flags an element referenced from two rows', () => {
+    const layout: DashboardV2Spec['layout'] = {
+      kind: 'RowsLayout',
+      spec: {
+        rows: [
+          {
+            kind: 'RowsLayoutRow',
+            spec: { title: 'Row 1', layout: { kind: 'GridLayout', spec: { items: gridItems(['panel-1']) } } },
+          },
+          {
+            kind: 'RowsLayoutRow',
+            spec: { title: 'Row 2', layout: { kind: 'GridLayout', spec: { items: gridItems(['panel-1']) } } },
+          },
+        ],
+      },
+    };
+    expect(findDuplicateElementReferences(spec(layout))).toEqual(['panel-1']);
+  });
+
+  it('flags duplicates found at different nesting depths', () => {
+    const layout: DashboardV2Spec['layout'] = {
+      kind: 'RowsLayout',
+      spec: {
+        rows: [
+          {
+            kind: 'RowsLayoutRow',
+            spec: { title: 'Row 1', layout: { kind: 'GridLayout', spec: { items: gridItems(['panel-1']) } } },
+          },
+          {
+            kind: 'RowsLayoutRow',
+            spec: {
+              title: 'Row 2',
+              layout: {
+                kind: 'TabsLayout',
+                spec: {
+                  tabs: [
+                    {
+                      kind: 'TabsLayoutTab',
+                      spec: { title: 'Tab 1', layout: { kind: 'GridLayout', spec: { items: gridItems(['panel-1']) } } },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+    expect(findDuplicateElementReferences(spec(layout))).toEqual(['panel-1']);
+  });
+
+  it('ignores layouts with no references at all', () => {
+    expect(findDuplicateElementReferences(spec({ kind: 'RowsLayout', spec: { rows: [] } }))).toEqual([]);
   });
 });

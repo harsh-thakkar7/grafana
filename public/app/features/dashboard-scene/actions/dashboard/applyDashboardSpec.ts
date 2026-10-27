@@ -1,5 +1,6 @@
 import { isEqual } from 'lodash';
 
+import { t } from '@grafana/i18n';
 import { locationService } from '@grafana/runtime';
 import {
   NewSceneObjectAddedEvent,
@@ -13,6 +14,7 @@ import { type DashboardScene } from '../../scene/DashboardScene';
 import { buildDashboardWithAccessInfoFromScene } from '../../serialization/buildDashboardWithAccessInfoFromScene';
 import { transformSaveModelSchemaV2ToScene } from '../../serialization/transformSaveModelSchemaV2ToScene';
 import { transformSceneToSaveModelSchemaV2 } from '../../serialization/transformSceneToSaveModelSchemaV2';
+import { findDuplicateElementReferences } from '../../v2schema/validation';
 import { edit } from '../utils/edit';
 
 // Minimal structural type for the bits of DashboardSceneUrlSync the rebuild drives, without
@@ -31,6 +33,17 @@ export interface ApplyDashboardSpecProps {
 }
 
 export function applyDashboardSpec({ scene, spec, description, scope }: ApplyDashboardSpecProps): void {
+  const duplicateElementReferences = findDuplicateElementReferences(spec);
+  if (duplicateElementReferences.length > 0) {
+    throw new Error(
+      t(
+        'dashboard.schema-editor.duplicate-element-references',
+        'Layout items share the same element reference: {{names}}. Each element must be referenced by at most one layout item; use a library panel to render the same panel in more than one place.',
+        { names: duplicateElementReferences.join(', ') }
+      )
+    );
+  }
+
   const dto = buildDashboardWithAccessInfoFromScene(scene, spec);
   const rebuilt = transformSaveModelSchemaV2ToScene(dto);
   // The URL state each spec produces on its own, before any URL is applied. Their difference is
